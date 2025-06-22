@@ -57,7 +57,7 @@ def import_apple_stock_data():
                     float(row[2]),  # high
                     float(row[3]),  # low
                     float(row[4]),  # close
-                    int(row[5])     # volume
+                    float(row[5])     # volume
                 ))
             
             # Batch insert

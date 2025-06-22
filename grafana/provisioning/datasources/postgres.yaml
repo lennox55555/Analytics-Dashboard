@@ -1,14 +1,14 @@
 apiVersion: 1
-
 datasources:
   - name: PostgreSQL
     type: postgres
+    uid: PD8C576611E62080A
     url: db:5432
-    user: ${DB_USER}
+    user: dbuser
     secureJsonData:
-      password: ${DB_PASSWORD}
+      password: 03SVZH7GPGNbRxeX
     jsonData:
-      database: ${DB_NAME}
+      database: analytics
       sslmode: 'disable'
       maxOpenConns: 100
       maxIdleConns: 100

@@ -1,0 +1,67 @@
+version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - .:/app
+      - ./certs:/app/certs
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - USE_HTTPS=${USE_HTTPS:-false}
+      - SSL_CERT_FILE=/app/certs/cert.pem
+      - SSL_KEY_FILE=/app/certs/key.pem
+      - GRAFANA_USER=${GRAFANA_USER:-admin}
+      - GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=us-east-1
+    depends_on:
+      - grafana
+    networks:
+      - analytics-network
+    restart: always
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://52.4.166.16:3000
+      - GF_SERVER_DOMAIN=52.4.166.16
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_AUTH_DISABLE_SIGNOUT_MENU=false
+      - GF_SECURITY_COOKIE_SECURE=false
+      - GF_SECURITY_COOKIE_SAMESITE=lax
+      - GF_DATABASE_TYPE=sqlite3
+      - GF_PATHS_DATA=/var/lib/grafana
+      - GF_INSTALL_PLUGINS=
+      - GF_PANELS_DISABLE_SANITIZE_HTML=true
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      # Fix admin permissions
+      - GF_USERS_DEFAULT_THEME=dark
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+      - GF_USERS_ALLOW_ORG_CREATE=true
+      - GF_USERS_AUTO_ASSIGN_ORG=true
+      - GF_USERS_AUTO_ASSIGN_ORG_ID=1
+      - GF_USERS_AUTO_ASSIGN_ORG_ROLE=Admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - analytics-network
+    restart: always
+networks:
+  analytics-network:
+    driver: bridge
+volumes:
+  grafana-data:

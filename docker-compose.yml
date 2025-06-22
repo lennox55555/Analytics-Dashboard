@@ -5,59 +5,41 @@ services:
     build: .
     ports:
       - "80:80"
-      - "443:443"
-    volumes:
-      - .:/app
-      - ./certs:/app/certs
     environment:
-      - DB_HOST=db
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - USE_HTTPS=${USE_HTTPS:-false}
-      - SSL_CERT_FILE=/app/certs/cert.pem
-      - SSL_KEY_FILE=/app/certs/key.pem
-      - GRAFANA_USER=${GRAFANA_USER}
-      - GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
+      - DB_HOST=dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com
+      - DB_NAME=analytics
+      - DB_USER=dbuser
+      - DB_PASSWORD=Superman1262!
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - GRAFANA_URL=http://grafana:3000
+      - GRAFANA_API_KEY=eyJrIjoieDVjV2wxQ3ViRVZUMGlOU0RVTEM5Zzk2SldUTml4Z0kiLCJuIjoiYWktZGFzaGJvYXJkLWNyZWF0b3IiLCJpZCI6MX0=
     depends_on:
-      - db
       - grafana
     networks:
       - analytics-network
-    restart: always
-
-  db:
-    image: postgres:14
-    environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=${DB_NAME}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - analytics-network
-    restart: always
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
-      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ANGULAR_SUPPORT_ENABLED=true
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+      - GF_UNIFIED_ALERTING_ENABLED=true
     volumes:
-      - grafana-data:/var/lib/grafana
+      - grafana-storage:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
     networks:
       - analytics-network
-    restart: always
 
 networks:
   analytics-network:
     driver: bridge
 
 volumes:
-  postgres-data:
-  grafana-data:
+  grafana-storage:
