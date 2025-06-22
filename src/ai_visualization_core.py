@@ -27,9 +27,14 @@ class GrafanaAPI:
     """Grafana API client using WORKING test script configuration"""
     
     def __init__(self):
-        self.grafana_url = "http://52.4.166.16:3000"
+        self.grafana_url = os.getenv("GRAFANA_URL", "http://localhost:3000")
+        # Separate URL for frontend/external access
+        self.grafana_external_url = os.getenv("GRAFANA_EXTERNAL_URL", "http://localhost:3000")
         self.session = requests.Session()
-        self.session.auth = ('admin', 'admin')
+        self.session.auth = (
+            os.getenv("GRAFANA_USER", "admin"), 
+            os.getenv("GRAFANA_PASSWORD", "admin")
+        )
         self.session.headers.update({'Content-Type': 'application/json'})
     
     def _clean_sql_query(self, sql_query: str) -> str:
@@ -227,9 +232,9 @@ class GrafanaAPI:
                     'success': True,
                     'dashboard_uid': dashboard_uid,
                     'dashboard_id': result['id'],
-                    'dashboard_url': dashboard_url,
-                    'embed_url': f"{self.grafana_url}/d-solo/{dashboard_uid}",
-                    'panel_embed_url': f"{self.grafana_url}/d-solo/{dashboard_uid}?orgId=1&panelId=1&refresh=30s&kiosk",
+                    'dashboard_url': f"{self.grafana_external_url}/d/{dashboard_uid}",
+                    'embed_url': f"{self.grafana_external_url}/d-solo/{dashboard_uid}",
+                    'panel_embed_url': f"{self.grafana_external_url}/d-solo/{dashboard_uid}?orgId=1&panelId=1&refresh=30s&kiosk",
                     'panel_id': 1,
                     'title': f"AI: {title} {timestamp}",
                     'sql_used': sql_query
@@ -276,13 +281,13 @@ class DatabaseAnalyzer:
     """Database analyzer with working database configuration"""
     
     def __init__(self):
-        # Working database configuration
+        # Database configuration from environment
         self.db_config = {
-            'host': 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com',
-            'database': 'analytics',
-            'user': 'dbuser',
-            'password': 'Superman1262!',
-            'port': 5432
+            'host': os.getenv("DB_HOST", "localhost"),
+            'database': os.getenv("DB_NAME", "analytics"),
+            'user': os.getenv("DB_USER", "dbuser"),
+            'password': os.getenv("DB_PASSWORD", ""),
+            'port': int(os.getenv("DB_PORT", "5432"))
         }
     
     def get_db_connection(self):

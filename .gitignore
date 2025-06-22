@@ -1,0 +1,86 @@
+# Security - Environment variables with secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Database dumps
+*.dump
+*.sql
+
+# SSL certificates
+certs/
+*.pem
+*.key
+*.crt
+
+# Temporary files
+tmp/
+temp/
+
+# Docker
+.dockerignore
+
+# AWS
+.aws/
+
+# Backup files
+*.bak
+*.backup
+
+# Local configuration overrides
+docker-compose.override.yml
+local_settings.py
+
+# Data files
+data/
+uploads/
+
+# Coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST

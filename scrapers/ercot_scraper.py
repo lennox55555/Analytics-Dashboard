@@ -1,5 +1,8 @@
 import requests
-import psycopg2
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from database.db_connection import get_db_connection
 from bs4 import BeautifulSoup
 from datetime import datetime
 import re
@@ -66,13 +69,8 @@ def scrape_ercot():
         
         logger.info(f"Parsed {len(data)} data points from ERCOT")
         
-        # Connect to the database
-        conn = psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com'),
-            database=os.environ.get('DB_NAME', 'analytics'),
-            user=os.environ.get('DB_USER', 'dbuser'),
-            password=os.environ.get('DB_PASSWORD', 'your-password')  # Replace with your actual password
-        )
+        # Connect to the database using shared connection
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Insert data into the database

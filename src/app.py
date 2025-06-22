@@ -43,11 +43,11 @@ app = FastAPI(title="ERCOT Analytics Dashboard")
 
 # Database configuration for AI system
 DB_CONFIG = {
-    'host': os.getenv("DB_HOST", "dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com"),
+    'host': os.getenv("DB_HOST", "localhost"),
     'database': os.getenv("DB_NAME", "analytics"),
     'user': os.getenv("DB_USER", "dbuser"),
-    'password': os.getenv("DB_PASSWORD", "Superman1262!"),
-    'port': 5432
+    'password': os.getenv("DB_PASSWORD", ""),
+    'port': int(os.getenv("DB_PORT", "5432"))
 }
 
 # Startup event handler
@@ -143,20 +143,11 @@ class APIUsageStats(BaseModel):
     requests_this_hour: int
     last_used: Optional[str] = None
 
-# Database connection function
-def get_db_connection():
-    try:
-        conn = psycopg2.connect(
-            host=os.getenv("DB_HOST", "dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com"),
-            database=os.getenv("DB_NAME", "analytics"),
-            user=os.getenv("DB_USER", "dbuser"),
-            password=os.getenv("DB_PASSWORD", "Superman1262!")
-        )
-        conn.autocommit = True
-        return conn
-    except Exception as e:
-        logger.error(f"Database connection error: {e}")
-        raise HTTPException(status_code=500, detail="Database connection error")
+# Import shared database connection
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from database.db_connection import get_db_connection
 
 # API Key utilities
 def generate_api_credentials():
@@ -368,12 +359,13 @@ async def create_default_dashboard_settings(user_id: int):
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        grafana_url = os.getenv("GRAFANA_URL", "http://localhost:3000")
         default_panels = [
-            ('chart1', 'Real-Time Price Overview', 'predefined', 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=14&refresh=30s', 1, 2),
-            ('chart2', 'System Available Capacity', 'predefined', 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=7&refresh=30s', 2, 1),
-            ('chart3', 'Emergency & Outage Status', 'predefined', 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=1&refresh=30s', 3, 1),
-            ('chart4', 'Reserve Capacity Overview', 'predefined', 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=12&refresh=30s', 4, 2),
-            ('chart5', 'Settlement Point Prices', 'predefined', 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=13&refresh=30s', 5, 2)
+            ('chart1', 'Real-Time Price Overview', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=14&refresh=30s', 1, 2),
+            ('chart2', 'System Available Capacity', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=7&refresh=30s', 2, 1),
+            ('chart3', 'Emergency & Outage Status', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=1&refresh=30s', 3, 1),
+            ('chart4', 'Reserve Capacity Overview', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=12&refresh=30s', 4, 2),
+            ('chart5', 'Settlement Point Prices', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=13&refresh=30s', 5, 2)
         ]
         
         for panel_id, panel_name, panel_type, iframe_src, panel_order, grid_column in default_panels:
@@ -499,41 +491,42 @@ async def get_available_panels(user: dict = Depends(get_current_user)):
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Get predefined panels
+        # Get predefined panels with environment-based Grafana URL
+        grafana_url = os.getenv("GRAFANA_URL", "http://localhost:3000")
         predefined_panels = [
             {
                 'panel_id': 'chart1',
                 'panel_name': 'Real-Time Price Overview',
                 'panel_type': 'predefined',
-                'iframe_src': 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=14&refresh=30s',
+                'iframe_src': f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=14&refresh=30s',
                 'grid_column': 2
             },
             {
                 'panel_id': 'chart2',
                 'panel_name': 'System Available Capacity',
                 'panel_type': 'predefined',
-                'iframe_src': 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=7&refresh=30s',
+                'iframe_src': f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=7&refresh=30s',
                 'grid_column': 1
             },
             {
                 'panel_id': 'chart3',
                 'panel_name': 'Emergency & Outage Status',
                 'panel_type': 'predefined',
-                'iframe_src': 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=1&refresh=30s',
+                'iframe_src': f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=1&refresh=30s',
                 'grid_column': 1
             },
             {
                 'panel_id': 'chart4',
                 'panel_name': 'Reserve Capacity Overview',
                 'panel_type': 'predefined',
-                'iframe_src': 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=12&refresh=30s',
+                'iframe_src': f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=12&refresh=30s',
                 'grid_column': 2
             },
             {
                 'panel_id': 'chart5',
                 'panel_name': 'Settlement Point Prices',
                 'panel_type': 'predefined',
-                'iframe_src': 'http://52.4.166.16:3000/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=13&refresh=30s',
+                'iframe_src': f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=13&refresh=30s',
                 'grid_column': 2
             }
         ]

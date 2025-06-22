@@ -1,11 +1,13 @@
 import requests
-import psycopg2
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from database.db_connection import get_db_connection
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import re
 import logging
 import os
-import sys
 import pytz
 
 # Configure logging
@@ -31,12 +33,7 @@ def get_ercot_now():
 def create_price_table():
     """Create the ERCOT price table if it doesn't exist."""
     try:
-        conn = psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com'),
-            database=os.environ.get('DB_NAME', 'analytics'),
-            user=os.environ.get('DB_USER', 'dbuser'),
-            password=os.environ.get('DB_PASSWORD', 'Superman1262!')
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         create_table_sql = """
@@ -81,12 +78,7 @@ def create_price_table():
 def clear_price_table():
     """Clear all data from the price table."""
     try:
-        conn = psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com'),
-            database=os.environ.get('DB_NAME', 'analytics'),
-            user=os.environ.get('DB_USER', 'dbuser'),
-            password=os.environ.get('DB_PASSWORD', 'Superman1262!')
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Get count before deletion
@@ -113,12 +105,7 @@ def clear_price_table():
 def get_existing_records(target_date):
     """Get existing records for a specific date to avoid duplicates."""
     try:
-        conn = psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com'),
-            database=os.environ.get('DB_NAME', 'analytics'),
-            user=os.environ.get('DB_USER', 'dbuser'),
-            password=os.environ.get('DB_PASSWORD', 'Superman1262!')
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -188,12 +175,7 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
         logger.info(f"Found {len(rows)} table rows")
         
         # Connect to database
-        conn = psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com'),
-            database=os.environ.get('DB_NAME', 'analytics'),
-            user=os.environ.get('DB_USER', 'dbuser'),
-            password=os.environ.get('DB_PASSWORD', 'Superman1262!')
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Process data rows

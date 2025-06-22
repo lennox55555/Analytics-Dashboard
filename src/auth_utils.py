@@ -7,7 +7,10 @@ import jwt
 from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import psycopg2
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from database.db_connection import get_db_connection
 from psycopg2.extras import RealDictCursor
 import logging
 
@@ -27,13 +30,8 @@ class AuthManager:
         self.algorithm = ALGORITHM
         
     def get_db_connection(self):
-        """Get database connection"""
-        return psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'dashboard-database-instance-1.cyo31ygmzfva.us-east-1.rds.amazonaws.com'),
-            database=os.environ.get('DB_NAME', 'analytics'),
-            user=os.environ.get('DB_USER', 'dbuser'),
-            password=os.environ.get('DB_PASSWORD', 'Superman1262!')
-        )
+        """Get database connection using shared module"""
+        return get_db_connection()
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Verify a password against its hash"""

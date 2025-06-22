@@ -6,7 +6,7 @@ datasources:
     url: db:5432
     user: dbuser
     secureJsonData:
-      password: 03SVZH7GPGNbRxeX
+      password: ${DB_PASSWORD}
     jsonData:
       database: analytics
       sslmode: 'disable'
