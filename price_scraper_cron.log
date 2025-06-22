@@ -5017,3 +5017,17 @@ time="2025-06-22T16:30:01Z" level=warning msg="The \"AWS_SECRET_ACCESS_KEY\" var
 2025-06-22 16:30:02,335 - INFO - Parsed 0 new price data rows (skipped 45 existing, 1 headers)
 2025-06-22 16:30:02,335 - INFO - Successfully stored 0 price records for 20250622
 Price scraper completed at Sun Jun 22 16:30:02 UTC 2025
+Running price scraper at Sun Jun 22 16:45:01 UTC 2025
+time="2025-06-22T16:45:01Z" level=warning msg="The \"AWS_ACCESS_KEY_ID\" variable is not set. Defaulting to a blank string."
+time="2025-06-22T16:45:01Z" level=warning msg="The \"AWS_SECRET_ACCESS_KEY\" variable is not set. Defaulting to a blank string."
+2025-06-22 16:45:01,560 - INFO - Price table created successfully
+2025-06-22 16:45:01,560 - INFO - Scraping today's price data (in Central Time)...
+2025-06-22 16:45:01,583 - INFO - Current UTC time: 2025-06-22 16:45:01 UTC
+2025-06-22 16:45:01,583 - INFO - Current Central time: 2025-06-22 11:45:01 CDT
+2025-06-22 16:45:01,583 - INFO - Using ERCOT date: 2025-06-22 (Central Time)
+2025-06-22 16:45:01,583 - INFO - Fetching price data from https://www.ercot.com/content/cdr/html/20250622_real_time_spp.html
+2025-06-22 16:45:01,648 - INFO - Found 45 existing records for 2025-06-22
+2025-06-22 16:45:01,751 - INFO - Found 47 table rows
+2025-06-22 16:45:01,791 - INFO - Parsed 1 new price data rows (skipped 45 existing, 1 headers)
+2025-06-22 16:45:01,807 - INFO - Successfully stored 1 price records for 20250622
+Price scraper completed at Sun Jun 22 16:45:01 UTC 2025
