@@ -263,15 +263,7 @@
                     <label for="aiRequest">Describe what you want to visualize</label>
                     <textarea id="aiRequest" rows="4" placeholder="e.g., Show me a line chart of settlement point prices over the last 24 hours" required></textarea>
                 </div>
-                <div class="form-group">
-                    <label for="vizType">Visualization Type</label>
-                    <select id="vizType">
-                        <option value="chart">Chart</option>
-                        <option value="graph">Graph</option>
-                        <option value="dashboard">Dashboard</option>
-                        <option value="map">Map</option>
-                    </select>
-                </div>
+                <!-- Visualization type is now auto-detected by LangGraph -->
                 <button type="submit" class="auth-btn" style="width: 100%; margin: 0;">Create Visualization</button>
                 <div id="aiMessage"></div>
             </form>⛓️
@@ -1021,7 +1013,7 @@
             }
 
             const requestText = document.getElementById('aiRequest').value;
-            const visualizationType = document.getElementById('vizType').value;
+            // Visualization type is now auto-detected by LangGraph
             const messageDiv = document.getElementById('aiMessage');
 
             console.log('🤖 Creating AI visualization:', requestText);
@@ -1030,15 +1022,14 @@
             messageDiv.innerHTML = '<div style="color: #00d4ff;">🔄 Creating AI visualization and adding to your dashboard...</div>';
 
             try {
-                const response = await fetch('/api/ai/visualizations', {
+                const response = await fetch('/api/ai/visualizations/langgraph', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${authToken}`
                     },
                     body: JSON.stringify({
-                        request_text: requestText,
-                        visualization_type: visualizationType
+                        request_text: requestText
                     })
                 });
 

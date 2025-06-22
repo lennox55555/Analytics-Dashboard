@@ -32,10 +32,14 @@ from auth_utils import auth_manager, get_current_user_optional, get_current_user
 # Import AI visualization system
 try:
     from ai_visualization_core import initialize_ai_system, get_ai_processor
+    from langgraph_ai_visualization import langgraph_visualizer
     AI_SYSTEM_AVAILABLE = True
+    LANGGRAPH_AVAILABLE = True
     logger.info("AI Visualization system imported successfully")
+    logger.info("LangGraph AI Visualization system imported successfully")
 except ImportError as e:
     AI_SYSTEM_AVAILABLE = False
+    LANGGRAPH_AVAILABLE = False
     logger.warning(f"AI Visualization system not available: {e}")
 
 # Create FastAPI app
@@ -1187,6 +1191,50 @@ async def get_user_visualizations(user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error fetching visualizations: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch visualizations")
+
+@app.post("/api/ai/visualizations/langgraph")
+async def create_ai_visualization_langgraph(viz_request: AIVisualizationRequest, user: dict = Depends(get_current_user)):
+    """Create AI visualization using LangGraph workflow"""
+    
+    if not LANGGRAPH_AVAILABLE:
+        raise HTTPException(status_code=503, detail="LangGraph AI system not available")
+    
+    logger.info(f"🚀 LangGraph AI visualization request from user {user['id']}: {viz_request.request_text}")
+    
+    try:
+        # Process the visualization request using LangGraph
+        result = await langgraph_visualizer.process_visualization_request(
+            user_id=user['id'],
+            request_text=viz_request.request_text,
+            visualization_type=viz_request.visualization_type
+        )
+        
+        if result['success']:
+            logger.info(f"✅ LangGraph AI visualization completed successfully: {result['visualization_id']}")
+            return {
+                "message": "AI visualization created successfully using LangGraph",
+                "visualization_id": result['visualization_id'],
+                "dashboard_uid": result['dashboard_uid'],
+                "iframe_url": result['iframe_url'],
+                "title": result['title'],
+                "sql_query": result['sql_query'],
+                "workflow": "langgraph",
+                "ai_powered": True,
+                "added_to_dashboard": True
+            }
+        else:
+            logger.error(f"❌ LangGraph AI visualization failed: {result['errors']}")
+            return {
+                "message": "AI visualization failed",
+                "errors": result['errors'],
+                "workflow": "langgraph",
+                "ai_powered": True,
+                "added_to_dashboard": False
+            }
+    
+    except Exception as e:
+        logger.error(f"❌ LangGraph AI visualization error: {e}")
+        raise HTTPException(status_code=500, detail=f"LangGraph AI visualization failed: {str(e)}")
 
 @app.get("/api/ai/test-auth")
 async def test_auth(user: dict = Depends(get_current_user)):
