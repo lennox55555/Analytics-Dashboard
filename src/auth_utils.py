@@ -11,15 +11,36 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db_connection import get_db_connection
+import psycopg2
 from psycopg2.extras import RealDictCursor
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Security configuration
-SECRET_KEY = os.environ.get("SECRET_KEY", "your-secret-key-change-this-in-production")
+# Security configuration with validation
+try:
+    SECRET_KEY = os.environ.get("SECRET_KEY")
+    if not SECRET_KEY:
+        logger.warning("SECRET_KEY environment variable not set. Using default (INSECURE for production!)")
+        SECRET_KEY = "your-secret-key-change-this-in-production"
+    elif SECRET_KEY == "your-secret-key-change-this-in-production":
+        logger.critical("Using default SECRET_KEY in production! This is a security risk!")
+    elif len(SECRET_KEY) < 32:
+        logger.warning(f"SECRET_KEY is too short ({len(SECRET_KEY)} chars). Recommended: 32+ characters")
+except Exception as e:
+    logger.error(f"Error reading SECRET_KEY: {e}")
+    SECRET_KEY = "your-secret-key-change-this-in-production"
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+
+try:
+    ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24 hours default
+    if ACCESS_TOKEN_EXPIRE_MINUTES <= 0:
+        logger.warning("Invalid ACCESS_TOKEN_EXPIRE_MINUTES, using default 24 hours")
+        ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+except (ValueError, TypeError) as e:
+    logger.error(f"Error parsing ACCESS_TOKEN_EXPIRE_MINUTES: {e}. Using default 24 hours")
+    ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
@@ -54,25 +75,93 @@ class AuthManager:
         return encoded_jwt
     
     def verify_token(self, token: str) -> Dict[str, Any]:
-        """Verify and decode JWT token"""
+        """Verify and decode JWT token with enhanced error handling"""
+        if not token or not isinstance(token, str):
+            logger.warning("Invalid token format provided")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token format"
+            )
+            
+        if len(token) > 2048:  # Reasonable token length limit
+            logger.warning("Token too long, possible attack")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+            
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            
+            # Validate payload structure
+            if not isinstance(payload, dict):
+                logger.warning("Invalid token payload structure")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token payload"
+                )
+                
+            # Check for required fields
+            if 'sub' not in payload:
+                logger.warning("Token missing required 'sub' field")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token payload"
+                )
+                
             return payload
+            
         except jwt.ExpiredSignatureError:
+            logger.info("Token has expired")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has expired"
             )
-        except jwt.JWTError:
+        except jwt.InvalidTokenError:
+            logger.warning("Invalid token signature")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token signature"
+            )
+        except jwt.DecodeError:
+            logger.warning("Token decode error")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not decode token"
+            )
+        except jwt.JWTError as e:
+            logger.error(f"JWT error: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials"
             )
+        except Exception as e:
+            logger.error(f"Unexpected error verifying token: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token verification failed"
+            )
     
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Get user by email"""
+        """Get user by email with comprehensive error handling"""
+        if not email or not isinstance(email, str):
+            logger.warning(f"Invalid email provided: {email}")
+            return None
+            
+        # Basic email validation
+        if '@' not in email or len(email) > 255:
+            logger.warning(f"Invalid email format: {email}")
+            return None
+            
+        conn = None
+        cursor = None
+        
         try:
             conn = self.get_db_connection()
+            if not conn:
+                logger.error("Failed to get database connection in get_user_by_email")
+                return None
+                
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
             cursor.execute("""
@@ -80,22 +169,49 @@ class AuthManager:
                        is_active, is_verified, created_at, last_login
                 FROM users 
                 WHERE email = %s AND is_active = true
-            """, (email,))
+            """, (email.lower().strip(),))  # Normalize email
             
             user = cursor.fetchone()
-            cursor.close()
-            conn.close()
             
-            return dict(user) if user else None
-            
-        except Exception as e:
-            logger.error(f"Error getting user by email: {e}")
+            if user:
+                return dict(user)
+            else:
+                logger.debug(f"No active user found with email: {email}")
+                return None
+                
+        except psycopg2.Error as e:
+            logger.error(f"Database error getting user by email: {e}")
             return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting user by email: {e}")
+            return None
+        finally:
+            try:
+                if cursor:
+                    cursor.close()
+            except Exception as e:
+                logger.error(f"Error closing cursor: {e}")
+            try:
+                if conn:
+                    conn.close()
+            except Exception as e:
+                logger.error(f"Error closing database connection: {e}")
     
     def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Get user by ID"""
+        """Get user by ID with comprehensive error handling"""
+        if not user_id or not isinstance(user_id, int) or user_id <= 0:
+            logger.warning(f"Invalid user_id provided: {user_id}")
+            return None
+            
+        conn = None
+        cursor = None
+        
         try:
             conn = self.get_db_connection()
+            if not conn:
+                logger.error("Failed to get database connection in get_user_by_id")
+                return None
+                
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
             cursor.execute("""
@@ -106,14 +222,30 @@ class AuthManager:
             """, (user_id,))
             
             user = cursor.fetchone()
-            cursor.close()
-            conn.close()
             
-            return dict(user) if user else None
-            
-        except Exception as e:
-            logger.error(f"Error getting user by ID: {e}")
+            if user:
+                return dict(user)
+            else:
+                logger.debug(f"No active user found with ID: {user_id}")
+                return None
+                
+        except psycopg2.Error as e:
+            logger.error(f"Database error getting user by ID: {e}")
             return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting user by ID: {e}")
+            return None
+        finally:
+            try:
+                if cursor:
+                    cursor.close()
+            except Exception as e:
+                logger.error(f"Error closing cursor: {e}")
+            try:
+                if conn:
+                    conn.close()
+            except Exception as e:
+                logger.error(f"Error closing database connection: {e}")
     
     def create_user(self, email: str, username: str, password: str, 
                    first_name: str = None, last_name: str = None) -> Optional[Dict[str, Any]]:

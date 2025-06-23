@@ -19,8 +19,12 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
-# Load environment variables
-load_dotenv()
+# Load environment variables with error handling
+try:
+    load_dotenv()
+except Exception as e:
+    logger.error(f"Failed to load environment variables: {e}")
+    # Continue execution as some environment variables might still be available from system
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -45,14 +49,40 @@ except ImportError as e:
 # Create FastAPI app
 app = FastAPI(title="ERCOT Analytics Dashboard")
 
-# Database configuration for AI system
-DB_CONFIG = {
-    'host': os.getenv("DB_HOST", "localhost"),
-    'database': os.getenv("DB_NAME", "analytics"),
-    'user': os.getenv("DB_USER", "dbuser"),
-    'password': os.getenv("DB_PASSWORD", ""),
-    'port': int(os.getenv("DB_PORT", "5432"))
-}
+# Database configuration for AI system with enhanced error handling
+try:
+    DB_CONFIG = {
+        'host': os.getenv("DB_HOST", "localhost"),
+        'database': os.getenv("DB_NAME", "analytics"),
+        'user': os.getenv("DB_USER", "dbuser"),
+        'password': os.getenv("DB_PASSWORD", ""),
+        'port': int(os.getenv("DB_PORT", "5432"))
+    }
+    
+    # Validate required database configuration
+    required_db_vars = ['DB_HOST', 'DB_NAME', 'DB_USER']
+    missing_vars = [var for var in required_db_vars if not os.getenv(var)]
+    if missing_vars:
+        logger.warning(f"Missing database environment variables: {missing_vars}. Using defaults.")
+        
+except ValueError as e:
+    logger.error(f"Invalid database port configuration: {e}")
+    DB_CONFIG = {
+        'host': 'localhost',
+        'database': 'analytics',
+        'user': 'dbuser',
+        'password': '',
+        'port': 5432
+    }
+except Exception as e:
+    logger.error(f"Error configuring database: {e}")
+    DB_CONFIG = {
+        'host': 'localhost',
+        'database': 'analytics',
+        'user': 'dbuser',
+        'password': '',
+        'port': 5432
+    }
 
 # Startup event handler
 @app.on_event("startup")
@@ -162,43 +192,74 @@ def generate_api_credentials():
     return api_key, api_secret, secret_hash
 
 def verify_api_key(api_key: str, api_secret: str = None):
-    """Verify API key and optional secret"""
+    """Verify API key and optional secret with comprehensive error handling"""
+    if not api_key or not isinstance(api_key, str):
+        logger.warning("Invalid API key format provided")
+        return None
+        
     try:
         conn = get_db_connection()
+        if not conn:
+            logger.error("Failed to get database connection for API key verification")
+            return None
+            
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        if api_secret:
-            secret_hash = hashlib.sha256(api_secret.encode()).hexdigest()
-            cursor.execute("""
-                SELECT ak.*, u.email, u.username 
-                FROM api_keys ak 
-                JOIN users u ON ak.user_id = u.id 
-                WHERE ak.api_key = %s AND ak.api_secret_hash = %s AND ak.is_active = true
-            """, (api_key, secret_hash))
-        else:
-            cursor.execute("""
-                SELECT ak.*, u.email, u.username 
-                FROM api_keys ak 
-                JOIN users u ON ak.user_id = u.id 
-                WHERE ak.api_key = %s AND ak.is_active = true
-            """, (api_key,))
-        
-        key_data = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        if not key_data:
-            return None
+        try:
+            if api_secret:
+                if not isinstance(api_secret, str):
+                    logger.warning("Invalid API secret format provided")
+                    return None
+                    
+                secret_hash = hashlib.sha256(api_secret.encode()).hexdigest()
+                cursor.execute("""
+                    SELECT ak.*, u.email, u.username 
+                    FROM api_keys ak 
+                    JOIN users u ON ak.user_id = u.id 
+                    WHERE ak.api_key = %s AND ak.api_secret_hash = %s AND ak.is_active = true
+                """, (api_key, secret_hash))
+            else:
+                cursor.execute("""
+                    SELECT ak.*, u.email, u.username 
+                    FROM api_keys ak 
+                    JOIN users u ON ak.user_id = u.id 
+                    WHERE ak.api_key = %s AND ak.is_active = true
+                """, (api_key,))
             
-        # Check if expired
-        if key_data['expires_at'] and datetime.now() > key_data['expires_at']:
-            return None
+            key_data = cursor.fetchone()
             
-        return dict(key_data)
+            if not key_data:
+                logger.info(f"API key not found or inactive: {api_key[:8]}...")
+                return None
+                
+            # Check if expired
+            if key_data['expires_at'] and datetime.now() > key_data['expires_at']:
+                logger.info(f"API key expired: {api_key[:8]}...")
+                return None
+                
+            return dict(key_data)
+            
+        except psycopg2.Error as e:
+            logger.error(f"Database error during API key verification: {e}")
+            return None
+        finally:
+            try:
+                cursor.close()
+            except Exception as e:
+                logger.error(f"Error closing cursor: {e}")
         
-    except Exception as e:
-        logger.error(f"Error verifying API key: {e}")
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error during API key verification: {e}")
         return None
+    except Exception as e:
+        logger.error(f"Unexpected error verifying API key: {e}")
+        return None
+    finally:
+        try:
+            if 'conn' in locals() and conn:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
 
 def require_api_key(f):
     """Decorator to require API key authentication"""
@@ -234,37 +295,86 @@ def require_api_key(f):
     return decorated_function
 
 async def log_api_usage(request: Request, key_data: dict):
-    """Log API usage for analytics and rate limiting"""
+    """Log API usage for analytics and rate limiting with enhanced error handling"""
+    if not key_data or not isinstance(key_data, dict) or 'id' not in key_data:
+        logger.error("Invalid key_data provided to log_api_usage")
+        return
+        
     try:
         conn = get_db_connection()
+        if not conn:
+            logger.error("Failed to get database connection for API usage logging")
+            return
+            
         cursor = conn.cursor()
         
-        # Update last used and usage count
-        cursor.execute("""
-            UPDATE api_keys 
-            SET last_used_at = CURRENT_TIMESTAMP, usage_count = usage_count + 1 
-            WHERE id = %s
-        """, (key_data['id'],))
+        try:
+            # Update last used and usage count
+            cursor.execute("""
+                UPDATE api_keys 
+                SET last_used_at = CURRENT_TIMESTAMP, usage_count = usage_count + 1 
+                WHERE id = %s
+            """, (key_data['id'],))
+            
+            # Safely extract request information
+            endpoint = str(request.url.path) if request.url else '/unknown'
+            method = request.method if hasattr(request, 'method') else 'UNKNOWN'
+            ip_address = None
+            user_agent = ''
+            query_params = '{}'
+            
+            try:
+                ip_address = request.client.host if request.client else None
+            except Exception as e:
+                logger.debug(f"Could not extract IP address: {e}")
+                
+            try:
+                user_agent = request.headers.get('user-agent', '') if request.headers else ''
+            except Exception as e:
+                logger.debug(f"Could not extract user agent: {e}")
+                
+            try:
+                query_params = json.dumps(dict(request.query_params)) if request.query_params else '{}'
+            except (TypeError, ValueError) as e:
+                logger.debug(f"Could not serialize query parameters: {e}")
+                query_params = '{}'
+            
+            # Log detailed usage
+            cursor.execute("""
+                INSERT INTO api_usage_logs 
+                (api_key_id, endpoint, method, ip_address, user_agent, query_parameters)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                key_data['id'],
+                endpoint,
+                method,
+                ip_address,
+                user_agent,
+                query_params
+            ))
+            
+            conn.commit()
+            
+        except psycopg2.Error as e:
+            logger.error(f"Database error logging API usage: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            try:
+                cursor.close()
+            except Exception as e:
+                logger.error(f"Error closing cursor: {e}")
         
-        # Log detailed usage
-        cursor.execute("""
-            INSERT INTO api_usage_logs 
-            (api_key_id, endpoint, method, ip_address, user_agent, query_parameters)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (
-            key_data['id'],
-            str(request.url.path),
-            request.method,
-            request.client.host if request.client else None,
-            request.headers.get('user-agent', ''),
-            json.dumps(dict(request.query_params))
-        ))
-        
-        cursor.close()
-        conn.close()
-        
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error during API usage logging: {e}")
     except Exception as e:
-        logger.error(f"Error logging API usage: {e}")
+        logger.error(f"Unexpected error logging API usage: {e}")
+    finally:
+        try:
+            if 'conn' in locals() and conn:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
 
 # Home route
 @app.get("/", response_class=HTMLResponse)
@@ -358,35 +468,77 @@ async def get_current_user_info(user: dict = Depends(get_current_user)):
 
 # Enhanced Dashboard System
 async def create_default_dashboard_settings(user_id: int):
-    """Create default dashboard settings for a new user with enhanced schema"""
+    """Create default dashboard settings for a new user with enhanced schema and error handling"""
+    if not user_id or not isinstance(user_id, int) or user_id <= 0:
+        logger.error(f"Invalid user_id provided: {user_id}")
+        return False
+        
     try:
         conn = get_db_connection()
+        if not conn:
+            logger.error("Failed to get database connection for creating default dashboard settings")
+            return False
+            
         cursor = conn.cursor()
         
-        grafana_url = os.getenv("GRAFANA_URL", "http://localhost:3000")
-        default_panels = [
-            ('chart1', 'Real-Time Price Overview', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=14&refresh=30s', 1, 2),
-            ('chart2', 'System Available Capacity', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=7&refresh=30s', 2, 1),
-            ('chart3', 'Emergency & Outage Status', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=1&refresh=30s', 3, 1),
-            ('chart4', 'Reserve Capacity Overview', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=12&refresh=30s', 4, 2),
-            ('chart5', 'Settlement Point Prices', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=13&refresh=30s', 5, 2)
-        ]
+        try:
+            grafana_url = os.getenv("GRAFANA_URL", "http://localhost:3000")
+            if not grafana_url:
+                logger.warning("GRAFANA_URL environment variable not set, using default")
+                grafana_url = "http://localhost:3000"
+                
+            default_panels = [
+                ('chart1', 'Real-Time Price Overview', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=14&refresh=30s', 1, 2),
+                ('chart2', 'System Available Capacity', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=7&refresh=30s', 2, 1),
+                ('chart3', 'Emergency & Outage Status', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=1&refresh=30s', 3, 1),
+                ('chart4', 'Reserve Capacity Overview', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=12&refresh=30s', 4, 2),
+                ('chart5', 'Settlement Point Prices', 'predefined', f'{grafana_url}/d-solo/bep90j9gjtb0gf/ercot?orgId=1&panelId=13&refresh=30s', 5, 2)
+            ]
+            
+            panels_created = 0
+            for panel_id, panel_name, panel_type, iframe_src, panel_order, grid_column in default_panels:
+                try:
+                    cursor.execute("""
+                        INSERT INTO user_dashboard_settings 
+                        (user_id, panel_id, panel_name, panel_type, iframe_src, is_visible, panel_order, panel_grid_column)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id, panel_id) DO NOTHING
+                    """, (user_id, panel_id, panel_name, panel_type, iframe_src, True, panel_order, grid_column))
+                    
+                    if cursor.rowcount > 0:
+                        panels_created += 1
+                        
+                except psycopg2.Error as e:
+                    logger.error(f"Error creating panel {panel_id} for user {user_id}: {e}")
+                    continue
+            
+            conn.commit()
+            logger.info(f"✅ Created {panels_created} default dashboard panels for user {user_id}")
+            return True
+            
+        except psycopg2.Error as e:
+            logger.error(f"Database error creating default dashboard settings: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            try:
+                cursor.close()
+            except Exception as e:
+                logger.error(f"Error closing cursor: {e}")
         
-        for panel_id, panel_name, panel_type, iframe_src, panel_order, grid_column in default_panels:
-            cursor.execute("""
-                INSERT INTO user_dashboard_settings 
-                (user_id, panel_id, panel_name, panel_type, iframe_src, is_visible, panel_order, panel_grid_column)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id, panel_id) DO NOTHING
-            """, (user_id, panel_id, panel_name, panel_type, iframe_src, True, panel_order, grid_column))
-        
-        cursor.close()
-        conn.close()
-        
-        logger.info(f"✅ Created default dashboard settings for user {user_id}")
-        
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error creating default dashboard settings: {e}")
+        return False
     except Exception as e:
-        logger.error(f"Error creating default dashboard settings: {e}")
+        logger.error(f"Unexpected error creating default dashboard settings: {e}")
+        return False
+    finally:
+        try:
+            if 'conn' in locals() and conn:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
 
 @app.get("/api/dashboard/settings")
 async def get_dashboard_settings(user: dict = Depends(get_current_user)):
@@ -1404,46 +1556,137 @@ async def clear_all_visualizations(user: dict = Depends(get_current_user)):
 # Original data API endpoints (unchanged)
 @app.get("/api/data")
 async def get_data():
-    conn = get_db_connection()
+    """Get ERCOT capacity monitor data with comprehensive error handling"""
+    conn = None
+    cursor = None
+    
     try:
+        conn = get_db_connection()
+        if not conn:
+            logger.error("Failed to get database connection for /api/data")
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+            
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT * FROM ercot_capacity_monitor ORDER BY timestamp DESC LIMIT 100")
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
         
-        for row in data:
-            if 'timestamp' in row:
-                row['timestamp'] = row['timestamp'].isoformat()
-        
-        return data
+        try:
+            cursor.execute("SELECT * FROM ercot_capacity_monitor ORDER BY timestamp DESC LIMIT 100")
+            data = cursor.fetchall()
+            
+            if not data:
+                logger.info("No data found in ercot_capacity_monitor table")
+                return []
+            
+            # Safely convert timestamps
+            processed_data = []
+            for row in data:
+                try:
+                    row_dict = dict(row)
+                    if 'timestamp' in row_dict and row_dict['timestamp']:
+                        row_dict['timestamp'] = row_dict['timestamp'].isoformat()
+                    processed_data.append(row_dict)
+                except Exception as e:
+                    logger.warning(f"Error processing row: {e}")
+                    continue
+            
+            logger.info(f"Successfully retrieved {len(processed_data)} records")
+            return processed_data
+            
+        except psycopg2.Error as e:
+            logger.error(f"Database query error in /api/data: {e}")
+            raise HTTPException(status_code=500, detail="Database query failed")
+            
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error in /api/data: {e}")
+        raise HTTPException(status_code=503, detail="Database connection failed")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Database query error: {e}")
-        raise HTTPException(status_code=500, detail="Database query error")
+        logger.error(f"Unexpected error in /api/data: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception as e:
+            logger.error(f"Error closing cursor: {e}")
+        try:
+            if conn:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
 
 @app.get("/api/ercot-data")
 async def get_ercot_data():
-    conn = get_db_connection()
+    """Get recent ERCOT capacity monitor data with comprehensive error handling"""
+    conn = None
+    cursor = None
+    
     try:
+        conn = get_db_connection()
+        if not conn:
+            logger.error("Failed to get database connection for /api/ercot-data")
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+            
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("""
-            SELECT timestamp, category, subcategory, value, unit 
-            FROM ercot_capacity_monitor 
-            WHERE timestamp >= NOW() - INTERVAL '6 hours'
-            ORDER BY timestamp DESC
-        """)
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
         
-        for row in data:
-            if 'timestamp' in row:
-                row['timestamp'] = row['timestamp'].isoformat()
-        
-        return data
+        try:
+            cursor.execute("""
+                SELECT timestamp, category, subcategory, value, unit 
+                FROM ercot_capacity_monitor 
+                WHERE timestamp >= NOW() - INTERVAL '6 hours'
+                ORDER BY timestamp DESC
+            """)
+            data = cursor.fetchall()
+            
+            if not data:
+                logger.info("No recent ERCOT data found (last 6 hours)")
+                return []
+            
+            # Safely convert timestamps and process data
+            processed_data = []
+            for row in data:
+                try:
+                    row_dict = dict(row)
+                    if 'timestamp' in row_dict and row_dict['timestamp']:
+                        row_dict['timestamp'] = row_dict['timestamp'].isoformat()
+                    # Validate numeric fields
+                    if 'value' in row_dict and row_dict['value'] is not None:
+                        try:
+                            row_dict['value'] = float(row_dict['value'])
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Invalid value in row: {row_dict['value']} - {e}")
+                            row_dict['value'] = None
+                    processed_data.append(row_dict)
+                except Exception as e:
+                    logger.warning(f"Error processing ERCOT data row: {e}")
+                    continue
+            
+            logger.info(f"Successfully retrieved {len(processed_data)} ERCOT records")
+            return processed_data
+            
+        except psycopg2.Error as e:
+            logger.error(f"Database query error in /api/ercot-data: {e}")
+            raise HTTPException(status_code=500, detail="ERCOT data query failed")
+            
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error in /api/ercot-data: {e}")
+        raise HTTPException(status_code=503, detail="Database connection failed")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"ERCOT data query error: {e}")
-        raise HTTPException(status_code=500, detail="ERCOT data query error")
+        logger.error(f"Unexpected error in /api/ercot-data: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception as e:
+            logger.error(f"Error closing cursor: {e}")
+        try:
+            if conn:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
 
 @app.get("/api/price-data")
 async def get_price_data():

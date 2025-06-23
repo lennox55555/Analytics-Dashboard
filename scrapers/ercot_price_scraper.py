@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db_connection import get_db_connection
+import psycopg2
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import re
@@ -148,7 +149,14 @@ def parse_time_to_24h(time_str):
         return None
 
 def scrape_ercot_prices_for_date(target_date, check_existing=True):
-    """Scrape ERCOT settlement point prices for a specific date."""
+    """Scrape ERCOT settlement point prices for a specific date with enhanced error handling."""
+    if not target_date:
+        logger.error("Invalid target_date provided")
+        return 0
+        
+    conn = None
+    cursor = None
+    
     try:
         date_str = target_date.strftime("%Y%m%d")
         url = f"https://www.ercot.com/content/cdr/html/{date_str}_real_time_spp.html"
@@ -159,24 +167,65 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
         if check_existing:
             existing_intervals = get_existing_records(target_date.date())
         
-        # Fetch the data
+        # Fetch the data with enhanced error handling
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+        }
+        
         try:
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, timeout=30, headers=headers)
             response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch data from {url}: {e}")
+            
+            if not response.text:
+                logger.error(f"Empty response received from {url}")
+                return 0
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout occurred while fetching data from {url}")
+            return 0
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error while fetching price data: {e}")
+            return 0
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 404:
+                logger.warning(f"Price data not available for {date_str} (404 Not Found)")
+            else:
+                logger.error(f"HTTP error {response.status_code} while fetching price data: {e}")
+            return 0
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error while fetching price data: {e}")
             return 0
         
-        # Parse the HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Parse the HTML with error handling
+        try:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            if not soup:
+                logger.error("Failed to parse HTML content for price data")
+                return 0
+        except Exception as e:
+            logger.error(f"Error parsing HTML content for price data: {e}")
+            return 0
         
         # Find all table rows
         rows = soup.find_all('tr')
         logger.info(f"Found {len(rows)} table rows")
         
-        # Connect to database
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Connect to database with error handling
+        try:
+            conn = get_db_connection()
+            if not conn:
+                logger.error("Failed to get database connection for price data")
+                return 0
+                
+            cursor = conn.cursor()
+            
+        except Exception as e:
+            logger.error(f"Database connection error for price data: {e}")
+            return 0
         
         # Process data rows
         data_rows = []
@@ -205,12 +254,21 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
             try:
                 # Parse date (first column) - format: MM/DD/YYYY
                 date_str_raw = cell_values[0]
-                oper_day = datetime.strptime(date_str_raw, '%m/%d/%Y').date()
+                try:
+                    oper_day = datetime.strptime(date_str_raw, '%m/%d/%Y').date()
+                except ValueError as e:
+                    logger.warning(f"Could not parse date '{date_str_raw}': {e}")
+                    continue
                 
                 # Parse time (second column) - format: HHMM
                 time_str_raw = cell_values[1]
-                time_formatted = parse_time_to_24h(time_str_raw)
-                if not time_formatted:
+                try:
+                    time_formatted = parse_time_to_24h(time_str_raw)
+                    if not time_formatted:
+                        logger.debug(f"Could not format time '{time_str_raw}'")
+                        continue
+                except Exception as e:
+                    logger.warning(f"Error parsing time '{time_str_raw}': {e}")
                     continue
                 
                 # Handle 2400 time - it represents 00:00 of the next day
@@ -219,7 +277,11 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
                     oper_day = oper_day + timedelta(days=1)
                     time_formatted = "00:00:00"
                 
-                interval_time = datetime.strptime(time_formatted, '%H:%M:%S').time()
+                try:
+                    interval_time = datetime.strptime(time_formatted, '%H:%M:%S').time()
+                except ValueError as e:
+                    logger.warning(f"Could not parse formatted time '{time_formatted}': {e}")
+                    continue
                 
                 # Skip if we already have this record
                 if check_existing and interval_time in existing_intervals:
@@ -227,7 +289,11 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
                     continue
                 
                 # Create full timestamp
-                timestamp = datetime.combine(oper_day, interval_time)
+                try:
+                    timestamp = datetime.combine(oper_day, interval_time)
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not create timestamp from {oper_day} and {interval_time}: {e}")
+                    continue
                 
                 # Parse price columns (columns 2-16)
                 # Expected column order: Oper Day, Interval Ending, HB_BUSAVG, HB_HOUSTON, HB_HUBAVG, 
@@ -236,11 +302,15 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
                 
                 def safe_float(value):
                     """Safely convert string to float, handling empty/invalid values."""
-                    try:
-                        if value and value != '-' and value.strip():
-                            return float(value.strip())
+                    if not value or value == '-':
                         return None
-                    except (ValueError, AttributeError):
+                    try:
+                        cleaned_value = str(value).strip().replace(',', '')
+                        if not cleaned_value:
+                            return None
+                        return float(cleaned_value)
+                    except (ValueError, AttributeError, TypeError) as e:
+                        logger.debug(f"Could not convert '{value}' to float: {e}")
                         return None
                 
                 row_data = {
@@ -272,6 +342,10 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
         
         logger.info(f"Parsed {len(data_rows)} new price data rows (skipped {skipped_existing} existing, {skipped_header} headers)")
         
+        if not data_rows:
+            logger.warning(f"No price data rows found for {date_str}")
+            return 0
+        
         # Insert data into database using ON CONFLICT to handle duplicates
         insert_sql = """
         INSERT INTO ercot_settlement_prices 
@@ -301,43 +375,83 @@ def scrape_ercot_prices_for_date(target_date, check_existing=True):
         """
         
         inserted_count = 0
-        for row_data in data_rows:
-            try:
-                cursor.execute(insert_sql, (
-                    row_data.get('timestamp'),
-                    row_data.get('oper_day'),
-                    row_data.get('interval_ending'),
-                    row_data.get('hb_busavg'),
-                    row_data.get('hb_houston'),
-                    row_data.get('hb_hubavg'),
-                    row_data.get('hb_north'),
-                    row_data.get('hb_pan'),
-                    row_data.get('hb_south'),
-                    row_data.get('hb_west'),
-                    row_data.get('lz_aen'),
-                    row_data.get('lz_cps'),
-                    row_data.get('lz_houston'),
-                    row_data.get('lz_lcra'),
-                    row_data.get('lz_north'),
-                    row_data.get('lz_raybn'),
-                    row_data.get('lz_south'),
-                    row_data.get('lz_west')
-                ))
-                inserted_count += 1
-            except Exception as e:
-                logger.warning(f"Could not insert row: {e}")
-                continue
+        failed_count = 0
         
-        conn.commit()
-        cursor.close()
-        conn.close()
+        try:
+            for i, row_data in enumerate(data_rows):
+                try:
+                    # Validate row data before insertion
+                    required_fields = ['timestamp', 'oper_day', 'interval_ending']
+                    missing_fields = [field for field in required_fields if field not in row_data or row_data[field] is None]
+                    
+                    if missing_fields:
+                        logger.warning(f"Row {i} missing required fields: {missing_fields}")
+                        failed_count += 1
+                        continue
+                    
+                    cursor.execute(insert_sql, (
+                        row_data.get('timestamp'),
+                        row_data.get('oper_day'),
+                        row_data.get('interval_ending'),
+                        row_data.get('hb_busavg'),
+                        row_data.get('hb_houston'),
+                        row_data.get('hb_hubavg'),
+                        row_data.get('hb_north'),
+                        row_data.get('hb_pan'),
+                        row_data.get('hb_south'),
+                        row_data.get('hb_west'),
+                        row_data.get('lz_aen'),
+                        row_data.get('lz_cps'),
+                        row_data.get('lz_houston'),
+                        row_data.get('lz_lcra'),
+                        row_data.get('lz_north'),
+                        row_data.get('lz_raybn'),
+                        row_data.get('lz_south'),
+                        row_data.get('lz_west')
+                    ))
+                    inserted_count += 1
+                    
+                except psycopg2.Error as db_error:
+                    logger.error(f"Database error inserting price row {i}: {db_error}")
+                    failed_count += 1
+                    continue
+                except Exception as e:
+                    logger.warning(f"Could not insert price row {i}: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            
+            if failed_count > 0:
+                logger.warning(f"Failed to insert {failed_count} price data rows")
+                
+        except Exception as e:
+            logger.error(f"Database transaction error for price data: {e}")
+            try:
+                conn.rollback()
+                logger.info("Price data transaction rolled back")
+            except Exception as rollback_error:
+                logger.error(f"Error during price data rollback: {rollback_error}")
+            return 0
         
         logger.info(f"Successfully stored {inserted_count} price records for {date_str}")
         return inserted_count
         
     except Exception as e:
-        logger.error(f"Error scraping prices for {target_date}: {str(e)}")
+        logger.error(f"Unexpected error scraping prices for {target_date}: {str(e)}")
         return 0
+    finally:
+        # Ensure database resources are cleaned up
+        try:
+            if cursor:
+                cursor.close()
+        except Exception as e:
+            logger.error(f"Error closing price data cursor: {e}")
+        try:
+            if conn:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error closing price data connection: {e}")
 
 def scrape_today_only():
     """Scrape only today's data for regular updates - using ERCOT's timezone."""

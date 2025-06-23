@@ -336,25 +336,70 @@ class DatabaseAnalyzer:
             return []
 
 class BedrockAIClient:
-    """AWS Bedrock client for AI-powered data analysis"""
+    """AWS Bedrock client for AI-powered data analysis with enhanced error handling"""
     
     def __init__(self, region_name: str = "us-east-1"):
+        if not region_name or not isinstance(region_name, str):
+            logger.warning(f"Invalid region_name: {region_name}, using default us-east-1")
+            region_name = "us-east-1"
+            
         self.region_name = region_name
         self.client = None
+        self.is_available = False
         self._initialize_client()
     
     def _initialize_client(self):
-        """Initialize Bedrock client with error handling"""
+        """Initialize Bedrock client with comprehensive error handling"""
         try:
-            self.client = boto3.client('bedrock-runtime', region_name=self.region_name)
-            logger.info("AWS Bedrock client initialized successfully")
+            # Check for required AWS credentials
+            aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+            aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            
+            if not aws_access_key or not aws_secret_key:
+                logger.warning("AWS credentials not found in environment variables")
+                # Try to initialize anyway - might work with IAM roles or AWS config
+            
+            self.client = boto3.client(
+                'bedrock-runtime', 
+                region_name=self.region_name,
+                # Add timeout configurations
+                config=boto3.session.Config(
+                    retries={'max_attempts': 3, 'mode': 'adaptive'},
+                    read_timeout=60,
+                    connect_timeout=10
+                )
+            )
+            
+            # Test the client with a simple operation
+            try:
+                # This will fail gracefully if credentials are invalid
+                response = self.client.list_foundation_models()
+                self.is_available = True
+                logger.info("AWS Bedrock client initialized and tested successfully")
+            except Exception as test_error:
+                logger.warning(f"Bedrock client initialized but test failed: {test_error}")
+                self.is_available = False
+                
+        except ImportError as e:
+            logger.error(f"boto3 library not available: {e}")
+            self.client = None
+            self.is_available = False
         except Exception as e:
             logger.error(f"Failed to initialize Bedrock client: {e}")
             self.client = None
+            self.is_available = False
     
     async def analyze_user_request(self, user_request: str, data_sources: List[DataSource]) -> Dict[str, Any]:
-        """Use Claude to analyze user request and suggest visualization"""
-        if not self.client:
+        """Use Claude to analyze user request and suggest visualization with enhanced error handling"""
+        if not user_request or not isinstance(user_request, str):
+            logger.error(f"Invalid user_request: {user_request}")
+            return self._fallback_analysis("general query", data_sources)
+            
+        if not data_sources or not isinstance(data_sources, list):
+            logger.error(f"Invalid data_sources: {data_sources}")
+            return self._fallback_analysis(user_request, [])
+            
+        if not self.client or not self.is_available:
             logger.warning("Bedrock client not available, using fallback analysis")
             return self._fallback_analysis(user_request, data_sources)
         
@@ -397,38 +442,94 @@ Respond with valid JSON only.
 """
         
         try:
+            # Validate prompt length
+            if len(prompt) > 100000:  # Bedrock has token limits
+                logger.warning("Prompt too long, truncating")
+                prompt = prompt[:95000] + "\n\nPlease generate a simple visualization."
+                
+            request_body = {
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 2000,
+                'messages': [
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ]
+            }
+            
             response = self.client.invoke_model(
                 modelId='anthropic.claude-3-sonnet-20240229-v1:0',
-                body=json.dumps({
-                    'anthropic_version': 'bedrock-2023-05-31',
-                    'max_tokens': 2000,
-                    'messages': [
-                        {
-                            'role': 'user',
-                            'content': prompt
-                        }
-                    ]
-                })
+                body=json.dumps(request_body)
             )
             
-            response_body = json.loads(response['body'].read())
-            content = response_body['content'][0]['text']
+            if not response or 'body' not in response:
+                logger.error("Invalid response from Bedrock")
+                return self._fallback_analysis(user_request, data_sources)
+            
+            try:
+                response_body = json.loads(response['body'].read())
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Bedrock response JSON: {e}")
+                return self._fallback_analysis(user_request, data_sources)
+                
+            if not response_body or 'content' not in response_body:
+                logger.error("Invalid Bedrock response structure")
+                return self._fallback_analysis(user_request, data_sources)
+                
+            if not response_body['content'] or len(response_body['content']) == 0:
+                logger.error("Empty content in Bedrock response")
+                return self._fallback_analysis(user_request, data_sources)
+                
+            content = response_body['content'][0].get('text', '')
+            
+            if not content:
+                logger.error("No text content in Bedrock response")
+                return self._fallback_analysis(user_request, data_sources)
             
             # Extract JSON from response
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
-                analysis = json.loads(json_match.group())
-                # Clean the SQL query from AI response
-                if 'sql_query' in analysis:
-                    analysis['sql_query'] = self._clean_ai_sql(analysis['sql_query'])
-                logger.info("Successfully analyzed user request with Bedrock")
-                return analysis
+                try:
+                    analysis = json.loads(json_match.group())
+                    
+                    # Validate analysis structure
+                    required_fields = ['sql_query', 'title']
+                    missing_fields = [field for field in required_fields if field not in analysis]
+                    if missing_fields:
+                        logger.warning(f"AI analysis missing required fields: {missing_fields}")
+                        # Add defaults for missing fields
+                        if 'sql_query' not in analysis:
+                            analysis['sql_query'] = "SELECT timestamp AS time, value FROM ercot_capacity_monitor WHERE $__timeFilter(timestamp) ORDER BY timestamp"
+                        if 'title' not in analysis:
+                            analysis['title'] = "ERCOT Data Visualization"
+                    
+                    # Clean the SQL query from AI response
+                    if 'sql_query' in analysis:
+                        analysis['sql_query'] = self._clean_ai_sql(analysis['sql_query'])
+                        
+                    logger.info("Successfully analyzed user request with Bedrock")
+                    return analysis
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON from AI response: {e}")
+                    return self._fallback_analysis(user_request, data_sources)
             else:
-                logger.warning("No valid JSON in Bedrock response, using fallback")
+                logger.warning("No valid JSON found in Bedrock response, using fallback")
                 return self._fallback_analysis(user_request, data_sources)
                 
+        except ImportError as e:
+            logger.error(f"Missing required libraries for Bedrock: {e}")
+            return self._fallback_analysis(user_request, data_sources)
         except Exception as e:
             logger.error(f"Bedrock analysis failed: {e}")
+            # Check if it's a specific AWS error
+            if 'AccessDenied' in str(e):
+                logger.error("AWS access denied - check IAM permissions for Bedrock")
+            elif 'ThrottlingException' in str(e):
+                logger.error("Bedrock API throttling - too many requests")
+            elif 'ValidationException' in str(e):
+                logger.error("Bedrock validation error - check model ID and request format")
             return self._fallback_analysis(user_request, data_sources)
     
     def _clean_ai_sql(self, sql_query: str) -> str:
